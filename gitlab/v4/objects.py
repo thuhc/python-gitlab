@@ -3697,6 +3697,16 @@ class ProjectAccessRequestManager(ListMixin, CreateMixin, DeleteMixin, RESTManag
     _from_parent_attrs = {"project_id": "id"}
 
 
+class ProjectApprovalRule(RESTObject):
+    pass
+
+
+class ProjectApprovalRuleManager(ListMixin, CreateMixin, DeleteMixin, RESTManager):
+    _path = "/projects/%(project_id)s/approval_rules"
+    _obj_cls = ProjectApprovalRule
+    _from_parent_attrs = {"project_id": "id"}
+
+
 class ProjectApproval(SaveMixin, RESTObject):
     _id_attr = None
 
@@ -3845,6 +3855,7 @@ class Project(SaveMixin, ObjectDeleteMixin, RESTObject):
     _managers = (
         ("accessrequests", "ProjectAccessRequestManager"),
         ("approvals", "ProjectApprovalManager"),
+        ("approvalrules", "ProjectApprovalRuleManager"),
         ("badges", "ProjectBadgeManager"),
         ("boards", "ProjectBoardManager"),
         ("branches", "ProjectBranchManager"),
