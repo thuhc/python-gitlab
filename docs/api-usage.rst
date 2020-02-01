@@ -23,9 +23,6 @@ To connect to a GitLab server, create a ``gitlab.Gitlab`` object:
    import os
    gl = gitlab.Gitlab('http://10.0.0.1', job_token=os.environ['CI_JOB_TOKEN'])
 
-   # username/password authentication (for GitLab << 10.2)
-   gl = gitlab.Gitlab('http://10.0.0.1', email='jdoe', password='s3cr3t')
-
    # anonymous gitlab instance, read-only for public resources
    gl = gitlab.Gitlab('http://10.0.0.1')
 
@@ -219,6 +216,18 @@ You can define the ``per_page`` value globally to avoid passing it to every
 
    gl = gitlab.Gitlab(url, token, per_page=50)
 
+Gitlab allows to also use keyset pagination. You can supply it to your project listing,
+but you can also do so globally. Be aware that GitLab then also requires you to only use supported
+order options. At the time of writing, only ``order_by="id"`` works.
+
+.. code-block:: python
+
+   gl = gitlab.Gitlab(url, token, pagination="keyset", order_by="id", per_page=100)
+   gl.projects.list()
+
+Reference:
+https://docs.gitlab.com/ce/api/README.html#keyset-based-pagination
+
 ``list()`` methods can also return a generator object which will handle the
 next calls to the API when required. This is the recommended way to iterate
 through a large number of items:
@@ -348,3 +357,38 @@ throttled, you can set this parameter to -1. This parameter is ignored if
 .. warning::
 
    You will get an Exception, if you then go over the rate limit of your GitLab instance.
+
+Transient errors
+----------------
+
+GitLab server can sometimes return a transient HTTP error.
+python-gitlab can automatically retry in such case, when
+``retry_transient_errors`` argument is set to ``True``.  When enabled,
+HTTP error codes 500 (Internal Server Error), 502 (502 Bad Gateway),
+503 (Service Unavailable), and 504 (Gateway Timeout) are retried.  By
+default an exception is raised for these errors.
+
+.. code-block:: python
+
+   import gitlab
+   import requests
+
+   gl = gitlab.gitlab(url, token, api_version=4)
+   gl.projects.list(all=True, retry_transient_errors=True)
+
+Timeout
+-------
+
+python-gitlab will by default use the ``timeout`` option from it's configuration
+for all requests. This is passed downwards to the ``requests`` module at the
+time of making the HTTP request. However if you would like to override the
+global timeout parameter for a particular call, you can provide the ``timeout``
+parameter to that API invocation:
+
+.. code-block:: python
+
+   import gitlab
+
+   gl = gitlab.gitlab(url, token, api_version=4)
+   gl.projects.import_github(ACCESS_TOKEN, 123456, "root", timeout=120.0)
+

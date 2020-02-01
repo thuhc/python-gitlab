@@ -63,9 +63,8 @@ Results can also be sorted using the following parameters:
 Get a single project::
 
     # Get a project by ID
+    project_id = 851
     project = gl.projects.get(project_id)
-    # Get a project by userspace/name
-    project = gl.projects.get('myteam/myproject')
 
 Create a project::
 
@@ -81,7 +80,7 @@ Create a project in a group::
 
     # You need to get the id of the group, then use the namespace_id attribute
     # to create the group
-    group_id = gl.groups.search('my-group')[0].id
+    group_id = gl.groups.list(search='my-group')[0].id
     project = gl.projects.create({'name': 'myrepo', 'namespace_id': group_id})
 
 Update a project::
@@ -344,6 +343,13 @@ Get a file::
 
     # get the decoded content
     print(f.decode())
+    
+Get a raw file::
+    
+    raw_content = project.files.raw(file_path='README.rst', ref='master')
+    print(raw_content)
+    with open('/tmp/raw-download.txt', 'wb') as f:
+        project.files.raw(file_path='README.rst', ref='master', streamed=True, action=f.write)
 
 Create a new file::
 
@@ -369,7 +375,7 @@ encoded text::
 
 Delete a file::
 
-    f.delete(commit_message='Delete testfile')
+    f.delete(commit_message='Delete testfile', branch='master')
 
 Get file blame::
 
@@ -445,7 +451,7 @@ List the project snippets::
 
 Get a snippet::
 
-    snippets = project.snippets.list(snippet_id)
+    snippet = project.snippets.get(snippet_id)
 
 Get the content of a snippet::
 
@@ -755,3 +761,54 @@ Protect a single repository tag or several project repository tags using a wildc
 Unprotect the given protected tag or wildcard protected tag.::
 
     protected_tag.delete()
+
+Additional project statistics
+=============================
+
+Reference
+---------
+
+* v4 API:
+
+  + :class:`gitlab.v4.objects.ProjectAdditionalStatistics`
+  + :class:`gitlab.v4.objects.ProjectAdditionalStatisticsManager`
+  + :attr:`gitlab.v4.objects.Project.additionalstatistics`
+
+* GitLab API: https://docs.gitlab.com/ce/api/project_statistics.html
+
+Examples
+---------
+
+Get all additional statistics of a project::
+
+    statistics = project.additionalstatistics.get()
+
+Get total fetches in last 30 days of a project::
+
+    total_fetches = project.additionalstatistics.get()['fetches']['total']
+
+Project issues statistics
+=========================
+
+Reference
+---------
+
+* v4 API:
+
+  + :class:`gitlab.v4.objects.ProjectIssuesStatistics`
+  + :class:`gitlab.v4.objects.ProjectIssuesStatisticsManager`
+  + :attr:`gitlab.v4.objects.Project.issuesstatistics`
+
+* GitLab API: https://docs.gitlab.com/ce/api/issues_statistics.html#get-project-issues-statistics
+
+Examples
+---------
+
+Get statistics of all issues in a project::
+
+    statistics = project.issuesstatistics.get()
+
+Get statistics of issues in a project with ``foobar`` in ``title`` and
+``description``::
+
+    statistics = project.issuesstatistics.get(search='foobar')

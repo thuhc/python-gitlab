@@ -16,17 +16,11 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import print_function
-
 import os
 import pickle
 import tempfile
 import json
-
-try:
-    import unittest
-except ImportError:
-    import unittest2 as unittest
+import unittest
 
 from httmock import HTTMock  # noqa
 from httmock import response  # noqa
@@ -124,6 +118,24 @@ class TestGitlabList(unittest.TestCase):
                 self.assertEqual(len(l), 2)
                 self.assertEqual(l[0]["a"], "b")
                 self.assertEqual(l[1]["c"], "d")
+
+    def test_all_omitted_when_as_list(self):
+        @urlmatch(scheme="http", netloc="localhost", path="/api/v4/tests", method="get")
+        def resp(url, request):
+            headers = {
+                "content-type": "application/json",
+                "X-Page": 2,
+                "X-Next-Page": 2,
+                "X-Per-Page": 1,
+                "X-Total-Pages": 2,
+                "X-Total": 2,
+            }
+            content = '[{"c": "d"}]'
+            return response(200, content, headers, None, 5, request)
+
+        with HTTMock(resp):
+            result = self.gl.http_list("/tests", as_list=False, all=True)
+            self.assertIsInstance(result, GitlabList)
 
 
 class TestGitlabHttpMethods(unittest.TestCase):
@@ -451,8 +463,6 @@ class TestGitlab(unittest.TestCase):
         self.gl = Gitlab(
             "http://localhost",
             private_token="private_token",
-            email="testuser@test.com",
-            password="testpassword",
             ssl_verify=True,
             api_version=4,
         )
@@ -465,66 +475,7 @@ class TestGitlab(unittest.TestCase):
         self.assertTrue(hasattr(unpickled, "_objects"))
         self.assertEqual(unpickled._objects, original_gl_objects)
 
-    def test_credentials_auth_nopassword(self):
-        self.gl.email = None
-        self.gl.password = None
-
-        @urlmatch(
-            scheme="http", netloc="localhost", path="/api/v4/session", method="post"
-        )
-        def resp_cont(url, request):
-            headers = {"content-type": "application/json"}
-            content = '{"message": "message"}'.encode("utf-8")
-            return response(404, content, headers, None, 5, request)
-
-        with HTTMock(resp_cont):
-            self.assertRaises(GitlabHttpError, self.gl._credentials_auth)
-
-    def test_credentials_auth_notok(self):
-        @urlmatch(
-            scheme="http", netloc="localhost", path="/api/v4/session", method="post"
-        )
-        def resp_cont(url, request):
-            headers = {"content-type": "application/json"}
-            content = '{"message": "message"}'.encode("utf-8")
-            return response(404, content, headers, None, 5, request)
-
-        with HTTMock(resp_cont):
-            self.assertRaises(GitlabHttpError, self.gl._credentials_auth)
-
-    def test_auth_with_credentials(self):
-        self.gl.private_token = None
-        self.test_credentials_auth(callback=self.gl.auth)
-
-    def test_auth_with_token(self):
-        self.test_token_auth(callback=self.gl.auth)
-
-    def test_credentials_auth(self, callback=None):
-        if callback is None:
-            callback = self.gl._credentials_auth
-        token = "credauthtoken"
-        id_ = 1
-        expected = {"PRIVATE-TOKEN": token}
-
-        @urlmatch(
-            scheme="http", netloc="localhost", path="/api/v4/session", method="post"
-        )
-        def resp_cont(url, request):
-            headers = {"content-type": "application/json"}
-            content = '{{"id": {0:d}, "private_token": "{1:s}"}}'.format(
-                id_, token
-            ).encode("utf-8")
-            return response(201, content, headers, None, 5, request)
-
-        with HTTMock(resp_cont):
-            callback()
-        self.assertEqual(self.gl.private_token, token)
-        self.assertDictEqual(expected, self.gl.headers)
-        self.assertEqual(self.gl.user.id, id_)
-
     def test_token_auth(self, callback=None):
-        if callback is None:
-            callback = self.gl._token_auth
         name = "username"
         id_ = 1
 
@@ -537,10 +488,10 @@ class TestGitlab(unittest.TestCase):
             return response(200, content, headers, None, 5, request)
 
         with HTTMock(resp_cont):
-            callback()
+            self.gl.auth()
         self.assertEqual(self.gl.user.username, name)
         self.assertEqual(self.gl.user.id, id_)
-        self.assertEqual(type(self.gl.user), CurrentUser)
+        self.assertIsInstance(self.gl.user, CurrentUser)
 
     def test_hooks(self):
         @urlmatch(
@@ -553,7 +504,7 @@ class TestGitlab(unittest.TestCase):
 
         with HTTMock(resp_get_hook):
             data = self.gl.hooks.get(1)
-            self.assertEqual(type(data), Hook)
+            self.assertIsInstance(data, Hook)
             self.assertEqual(data.url, "testurl")
             self.assertEqual(data.id, 1)
 
@@ -568,7 +519,7 @@ class TestGitlab(unittest.TestCase):
 
         with HTTMock(resp_get_project):
             data = self.gl.projects.get(1)
-            self.assertEqual(type(data), Project)
+            self.assertIsInstance(data, Project)
             self.assertEqual(data.name, "name")
             self.assertEqual(data.id, 1)
 
@@ -602,6 +553,62 @@ class TestGitlab(unittest.TestCase):
             self.assertEqual(environment.last_deployment, "sometime")
             self.assertEqual(environment.name, "environment_name")
 
+    def test_project_additional_statistics(self):
+        @urlmatch(
+            scheme="http", netloc="localhost", path="/api/v4/projects/1$", method="get"
+        )
+        def resp_get_project(url, request):
+            headers = {"content-type": "application/json"}
+            content = '{"name": "name", "id": 1}'.encode("utf-8")
+            return response(200, content, headers, None, 5, request)
+
+        @urlmatch(
+            scheme="http",
+            netloc="localhost",
+            path="/api/v4/projects/1/statistics",
+            method="get",
+        )
+        def resp_get_environment(url, request):
+            headers = {"content-type": "application/json"}
+            content = """{"fetches": {"total": 50, "days": [{"count": 10, "date": "2018-01-10"}]}}""".encode(
+                "utf-8"
+            )
+            return response(200, content, headers, None, 5, request)
+
+        with HTTMock(resp_get_project, resp_get_environment):
+            project = self.gl.projects.get(1)
+            statistics = project.additionalstatistics.get()
+            self.assertIsInstance(statistics, ProjectAdditionalStatistics)
+            self.assertEqual(statistics.fetches["total"], 50)
+
+    def test_project_issues_statistics(self):
+        @urlmatch(
+            scheme="http", netloc="localhost", path="/api/v4/projects/1$", method="get"
+        )
+        def resp_get_project(url, request):
+            headers = {"content-type": "application/json"}
+            content = '{"name": "name", "id": 1}'.encode("utf-8")
+            return response(200, content, headers, None, 5, request)
+
+        @urlmatch(
+            scheme="http",
+            netloc="localhost",
+            path="/api/v4/projects/1/issues_statistics",
+            method="get",
+        )
+        def resp_get_environment(url, request):
+            headers = {"content-type": "application/json"}
+            content = """{"statistics": {"counts": {"all": 20, "closed": 5, "opened": 15}}}""".encode(
+                "utf-8"
+            )
+            return response(200, content, headers, None, 5, request)
+
+        with HTTMock(resp_get_project, resp_get_environment):
+            project = self.gl.projects.get(1)
+            statistics = project.issuesstatistics.get()
+            self.assertIsInstance(statistics, ProjectIssuesStatistics)
+            self.assertEqual(statistics.statistics["counts"]["all"], 20)
+
     def test_groups(self):
         @urlmatch(
             scheme="http", netloc="localhost", path="/api/v4/groups/1", method="get"
@@ -614,7 +621,7 @@ class TestGitlab(unittest.TestCase):
 
         with HTTMock(resp_get_group):
             data = self.gl.groups.get(1)
-            self.assertEqual(type(data), Group)
+            self.assertIsInstance(data, Group)
             self.assertEqual(data.name, "name")
             self.assertEqual(data.path, "path")
             self.assertEqual(data.id, 1)
@@ -647,7 +654,7 @@ class TestGitlab(unittest.TestCase):
     def test_users(self):
         with HTTMock(self.resp_get_user):
             user = self.gl.users.get(1)
-            self.assertEqual(type(user), User)
+            self.assertIsInstance(user, User)
             self.assertEqual(user.name, "name")
             self.assertEqual(user.id, 1)
 
@@ -668,19 +675,20 @@ class TestGitlab(unittest.TestCase):
             user = self.gl.users.get(1)
         with HTTMock(resp_get_user_status):
             status = user.status.get()
-            self.assertEqual(type(status), UserStatus)
+            self.assertIsInstance(status, UserStatus)
             self.assertEqual(status.message, "test")
             self.assertEqual(status.emoji, "thumbsup")
 
     def test_todo(self):
-        todo_content = open(os.path.dirname(__file__) + "/data/todo.json", "r").read()
-        json_content = json.loads(todo_content)
+        with open(os.path.dirname(__file__) + "/data/todo.json", "r") as json_file:
+            todo_content = json_file.read()
+            json_content = json.loads(todo_content)
+            encoded_content = todo_content.encode("utf-8")
 
         @urlmatch(scheme="http", netloc="localhost", path="/api/v4/todos", method="get")
         def resp_get_todo(url, request):
             headers = {"content-type": "application/json"}
-            content = todo_content.encode("utf-8")
-            return response(200, content, headers, None, 5, request)
+            return response(200, encoded_content, headers, None, 5, request)
 
         @urlmatch(
             scheme="http",
@@ -696,7 +704,7 @@ class TestGitlab(unittest.TestCase):
 
         with HTTMock(resp_get_todo):
             todo = self.gl.todos.list()[0]
-            self.assertEqual(type(todo), Todo)
+            self.assertIsInstance(todo, Todo)
             self.assertEqual(todo.id, 102)
             self.assertEqual(todo.target_type, "MergeRequest")
             self.assertEqual(todo.target["assignee"]["username"], "root")
@@ -716,6 +724,75 @@ class TestGitlab(unittest.TestCase):
 
         with HTTMock(resp_mark_all_as_done):
             self.gl.todos.mark_all_as_done()
+
+    def test_deployment(self):
+        content = '{"id": 42, "status": "success", "ref": "master"}'
+        json_content = json.loads(content)
+
+        @urlmatch(
+            scheme="http",
+            netloc="localhost",
+            path="/api/v4/projects/1/deployments",
+            method="post",
+        )
+        def resp_deployment_create(url, request):
+            headers = {"content-type": "application/json"}
+            return response(200, json_content, headers, None, 5, request)
+
+        @urlmatch(
+            scheme="http",
+            netloc="localhost",
+            path="/api/v4/projects/1/deployments/42",
+            method="put",
+        )
+        def resp_deployment_update(url, request):
+            headers = {"content-type": "application/json"}
+            return response(200, json_content, headers, None, 5, request)
+
+        with HTTMock(resp_deployment_create):
+            deployment = self.gl.projects.get(1, lazy=True).deployments.create(
+                {
+                    "environment": "Test",
+                    "sha": "1agf4gs",
+                    "ref": "master",
+                    "tag": False,
+                    "status": "created",
+                }
+            )
+            self.assertEqual(deployment.id, 42)
+            self.assertEqual(deployment.status, "success")
+            self.assertEqual(deployment.ref, "master")
+
+        with HTTMock(resp_deployment_update):
+            json_content["status"] = "failed"
+            deployment.status = "failed"
+            deployment.save()
+            self.assertEqual(deployment.status, "failed")
+
+    def test_user_activate_deactivate(self):
+        @urlmatch(
+            scheme="http",
+            netloc="localhost",
+            path="/api/v4/users/1/activate",
+            method="post",
+        )
+        def resp_activate(url, request):
+            headers = {"content-type": "application/json"}
+            return response(201, {}, headers, None, 5, request)
+
+        @urlmatch(
+            scheme="http",
+            netloc="localhost",
+            path="/api/v4/users/1/deactivate",
+            method="post",
+        )
+        def resp_deactivate(url, request):
+            headers = {"content-type": "application/json"}
+            return response(201, {}, headers, None, 5, request)
+
+        with HTTMock(resp_activate), HTTMock(resp_deactivate):
+            self.gl.users.get(1, lazy=True).activate()
+            self.gl.users.get(1, lazy=True).deactivate()
 
     def test_update_submodule(self):
         @urlmatch(
@@ -743,10 +820,10 @@ class TestGitlab(unittest.TestCase):
             "committer_name": "Author",
             "committer_email": "author@example.com",
             "created_at": "2018-09-20T09:26:24.000-07:00",
-            "message": "Message", 
-            "parent_ids": [ "ae1d9fb46aa2b07ee9836d49862ec4e2c46fbbba" ], 
+            "message": "Message",
+            "parent_ids": [ "ae1d9fb46aa2b07ee9836d49862ec4e2c46fbbba" ],
             "committed_date": "2018-09-20T09:26:24.000-07:00",
-            "authored_date": "2018-09-20T09:26:24.000-07:00", 
+            "authored_date": "2018-09-20T09:26:24.000-07:00",
             "status": null}"""
             content = content.encode("utf-8")
             return response(200, content, headers, None, 5, request)
@@ -767,6 +844,33 @@ class TestGitlab(unittest.TestCase):
             self.assertEqual(ret["message"], "Message")
             self.assertEqual(ret["id"], "ed899a2f4b50b4370feeea94676502b42383c746")
 
+    def test_import_github(self):
+        @urlmatch(
+            scheme="http",
+            netloc="localhost",
+            path="/api/v4/import/github",
+            method="post",
+        )
+        def resp_import_github(url, request):
+            headers = {"content-type": "application/json"}
+            content = """{
+            "id": 27,
+            "name": "my-repo",
+            "full_path": "/root/my-repo",
+            "full_name": "Administrator / my-repo"
+            }"""
+            content = content.encode("utf-8")
+            return response(200, content, headers, None, 25, request)
+
+        with HTTMock(resp_import_github):
+            base_path = "/root"
+            name = "my-repo"
+            ret = self.gl.projects.import_github("githubkey", 1234, base_path, name)
+            self.assertIsInstance(ret, dict)
+            self.assertEqual(ret["name"], name)
+            self.assertEqual(ret["full_path"], "/".join((base_path, name)))
+            self.assertTrue(ret["full_name"].endswith(name))
+
     def _default_config(self):
         fd, temp_path = tempfile.mkstemp()
         os.write(fd, valid_config)
@@ -784,5 +888,5 @@ class TestGitlab(unittest.TestCase):
 
         config_path = self._default_config()
         gl = MyGitlab.from_config("one", [config_path])
-        self.assertEqual(type(gl).__name__, "MyGitlab")
+        self.assertIsInstance(gl, MyGitlab)
         os.unlink(config_path)

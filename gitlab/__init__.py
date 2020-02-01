@@ -23,7 +23,6 @@ import time
 import warnings
 
 import requests
-import six
 
 import gitlab.config
 from gitlab.const import *  # noqa
@@ -31,7 +30,7 @@ from gitlab.exceptions import *  # noqa
 from gitlab import utils  # noqa
 
 __title__ = "python-gitlab"
-__version__ = "1.12.0"
+__version__ = "2.0.0"
 __author__ = "Gauvain Pocentek"
 __email__ = "gauvainpocentek@gmail.com"
 __license__ = "LGPL3"
@@ -47,8 +46,8 @@ REDIRECT_MSG = (
 
 def _sanitize(value):
     if isinstance(value, dict):
-        return dict((k, _sanitize(v)) for k, v in six.iteritems(value))
-    if isinstance(value, six.string_types):
+        return dict((k, _sanitize(v)) for k, v in value.items())
+    if isinstance(value, str):
         return value.replace("/", "%2F")
     return value
 
@@ -61,8 +60,6 @@ class Gitlab(object):
         private_token (str): The user private token
         oauth_token (str): An oauth token
         job_token (str): A CI job token
-        email (str): The user email or login.
-        password (str): The user password (associated with email).
         ssl_verify (bool|str): Whether SSL certificates should be validated. If
             the value is a string, it is the path to a CA file used for
             certificate validation.
@@ -70,6 +67,8 @@ class Gitlab(object):
         http_username (str): Username for HTTP authentication
         http_password (str): Password for HTTP authentication
         api_version (str): Gitlab API version to use (support for 4 only)
+        pagination (str): Can be set to 'keyset' to use keyset pagination
+        order_by (str): Set order_by globally
     """
 
     def __init__(
@@ -78,8 +77,6 @@ class Gitlab(object):
         private_token=None,
         oauth_token=None,
         job_token=None,
-        email=None,
-        password=None,
         ssl_verify=True,
         http_username=None,
         http_password=None,
@@ -87,6 +84,8 @@ class Gitlab(object):
         api_version="4",
         session=None,
         per_page=None,
+        pagination=None,
+        order_by=None,
     ):
 
         self._api_version = str(api_version)
@@ -96,12 +95,8 @@ class Gitlab(object):
         #: Timeout to use for requests to gitlab server
         self.timeout = timeout
         #: Headers that will be used in request to GitLab
-        self.headers = {}
+        self.headers = {"User-Agent": "%s/%s" % (__title__, __version__)}
 
-        #: The user email
-        self.email = email
-        #: The user password (associated with email)
-        self.password = password
         #: Whether SSL certificates should be validated
         self.ssl_verify = ssl_verify
 
@@ -116,6 +111,8 @@ class Gitlab(object):
         self.session = session or requests.Session()
 
         self.per_page = per_page
+        self.pagination = pagination
+        self.order_by = order_by
 
         objects = importlib.import_module("gitlab.v%s.objects" % self._api_version)
         self._objects = objects
@@ -136,12 +133,14 @@ class Gitlab(object):
         self.projects = objects.ProjectManager(self)
         self.runners = objects.RunnerManager(self)
         self.settings = objects.ApplicationSettingsManager(self)
+        self.appearance = objects.ApplicationAppearanceManager(self)
         self.sidekiq = objects.SidekiqManager(self)
         self.snippets = objects.SnippetManager(self)
         self.users = objects.UserManager(self)
         self.todos = objects.TodoManager(self)
         self.dockerfiles = objects.DockerfileManager(self)
         self.events = objects.EventManager(self)
+        self.audit_events = objects.AuditEventManager(self)
         self.features = objects.FeatureManager(self)
         self.pagesdomains = objects.PagesDomainManager(self)
         self.user_activities = objects.UserActivitiesManager(self)
@@ -205,30 +204,16 @@ class Gitlab(object):
             http_password=config.http_password,
             api_version=config.api_version,
             per_page=config.per_page,
+            pagination=config.pagination,
+            order_by=config.order_by,
         )
 
     def auth(self):
-        """Performs an authentication.
-
-        Uses either the private token, or the email/password pair.
+        """Performs an authentication using private token.
 
         The `user` attribute will hold a `gitlab.objects.CurrentUser` object on
         success.
         """
-        if self.private_token or self.oauth_token or self.job_token:
-            self._token_auth()
-        else:
-            self._credentials_auth()
-
-    def _credentials_auth(self):
-        data = {"email": self.email, "password": self.password}
-        r = self.http_post("/session", data)
-        manager = self._objects.CurrentUserManager(self)
-        self.user = self._objects.CurrentUser(manager, r)
-        self.private_token = self.user.private_token
-        self._set_auth_info()
-
-    def _token_auth(self):
         self.user = self._objects.CurrentUserManager(self).get()
 
     def version(self):
@@ -350,13 +335,12 @@ class Gitlab(object):
             return url
 
     def _set_auth_info(self):
-        if (
-            sum(
-                bool(arg)
-                for arg in [self.private_token, self.oauth_token, self.job_token]
-            )
-            != 1
-        ):
+        tokens = [
+            token
+            for token in [self.private_token, self.oauth_token, self.job_token]
+            if token
+        ]
+        if len(tokens) > 1:
             raise ValueError(
                 "Only one of private_token, oauth_token or job_token should "
                 "be defined"
@@ -511,6 +495,8 @@ class Gitlab(object):
 
         verify = opts.pop("verify")
         timeout = opts.pop("timeout")
+        # If timeout was passed into kwargs, allow it to override the default
+        timeout = kwargs.get("timeout", timeout)
 
         # We need to deal with json vs. data when uploading files
         if files:
@@ -538,6 +524,8 @@ class Gitlab(object):
 
         # obey the rate limit by default
         obey_rate_limit = kwargs.get("obey_rate_limit", True)
+        # do not retry transient errors by default
+        retry_transient_errors = kwargs.get("retry_transient_errors", False)
 
         # set max_retries to 10 by default, disable by setting it to -1
         max_retries = kwargs.get("max_retries", 10)
@@ -551,7 +539,9 @@ class Gitlab(object):
             if 200 <= result.status_code < 300:
                 return result
 
-            if 429 == result.status_code and obey_rate_limit:
+            if (429 == result.status_code and obey_rate_limit) or (
+                result.status_code in [500, 502, 503, 504] and retry_transient_errors
+            ):
                 if max_retries == -1 or cur_retries < max_retries:
                     wait_time = 2 ** cur_retries * 0.1
                     if "Retry-After" in result.headers:
@@ -650,7 +640,7 @@ class Gitlab(object):
         get_all = kwargs.pop("all", False)
         url = self._build_url(path)
 
-        if get_all is True:
+        if get_all is True and as_list is True:
             return list(GitlabList(self, url, query_data, **kwargs))
 
         if "page" in kwargs or as_list is True:
@@ -853,8 +843,10 @@ class GitlabList(object):
             self._current += 1
             return item
         except IndexError:
-            if self._next_url and self._get_next is True:
-                self._query(self._next_url)
-                return self.next()
+            pass
 
-            raise StopIteration
+        if self._next_url and self._get_next is True:
+            self._query(self._next_url)
+            return self.next()
+
+        raise StopIteration

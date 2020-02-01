@@ -41,7 +41,7 @@ example:
    [somewhere]
    url = https://some.whe.re
    private_token = vTbFeqJYCY3sibBP7BZM
-   api_version = 3
+   api_version = 4
 
    [elsewhere]
    url = http://else.whe.re:8080
@@ -69,8 +69,8 @@ parameters. You can override the values in each GitLab server section.
      - Integer
      - Number of seconds to wait for an answer before failing.
    * - ``api_version``
-     - ``3`` or ``4``
-     - The API version to use to make queries. Requires python-gitlab >= 1.3.0.
+     - ``4``
+     - The API version to use to make queries. Only ``4`` is available since 1.5.0.
    * - ``per_page``
      - Integer between 1 and 100
      - The number of items to return in listing queries. GitLab limits the
@@ -103,8 +103,7 @@ server, with very limited permissions.
    * - ``job_token``
      - Your job token. See `the official  documentation`_job-token to learn how to obtain a token.
    * - ``api_version``
-     - GitLab API version to use (``3`` or ``4``). Defaults to ``4`` since
-       version 1.3.0.
+     - GitLab API version to use. Only ``4`` is available since 1.5.0.
    * - ``http_username``
      - Username for optional HTTP authentication
    * - ``http_password``
@@ -163,7 +162,7 @@ These options must be defined before the mandatory arguments.
     **Notice:**
 
         The `PyYAML package <https://pypi.org/project/PyYAML/>`_ is required to use the yaml output option.
-        You need to install it separately using ``pip install PyYAML``
+        You need to install it explicitly using ``pip install python-gitlab[yaml]``
 
 ``--fields``, ``-f``
     Comma-separated list of fields to display (``yaml`` and ``json`` output
@@ -272,3 +271,61 @@ command line. This is handy for values containing new lines for instance:
    It is obviously the best project around
    EOF
    $ gitlab project create --name SuperProject --description @/tmp/description
+
+Enabling shell autocompletion
+============================
+
+To get autocompletion, you'll need to install the package with the extra
+"autocompletion":
+
+.. code-block:: console
+
+    pip install python_gitlab[autocompletion]
+
+
+Add the appropriate command below to your shell's config file so that it is run on
+startup. You will likely have to restart or re-login for the autocompletion to
+start working.
+
+Bash
+----
+
+.. code-block:: console
+
+   eval "$(register-python-argcomplete gitlab)"
+
+tcsh
+----
+
+.. code-block:: console
+
+   eval `register-python-argcomplete --shell tcsh gitlab`
+
+fish
+----
+
+.. code-block:: console
+
+   register-python-argcomplete --shell fish gitlab | .
+
+Zsh
+---
+
+.. warning::
+
+    Zsh autocompletion support is broken right now in the argcomplete python
+    package. Perhaps it will be fixed in a future release of argcomplete at
+    which point the following instructions will enable autocompletion in zsh.
+
+To activate completions for zsh you need to have bashcompinit enabled in zsh:
+
+.. code-block:: console
+
+   autoload -U bashcompinit
+   bashcompinit
+
+Afterwards you can enable completion for gitlab:
+
+.. code-block:: console
+
+   eval "$(register-python-argcomplete gitlab)"
